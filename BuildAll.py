@@ -8,39 +8,31 @@
 import multiprocessing, os, platform, subprocess, sys
 
 def LogError(message):
-	print("[E] %s" % message)
+	print(f"[E] {message}")
 	sys.stdout.flush()
-	if 0 == sys.platform.find("win"):
-		pauseCmd = "pause"
-	else:
-		pauseCmd = "read"
+	pauseCmd = "pause" if sys.platform.find("win") == 0 else "read"
 	subprocess.call(pauseCmd, shell = True)
 	sys.exit(1)
 
 def LogInfo(message):
-	print("[I] %s" % message)
+	print(f"[I] {message}")
 	sys.stdout.flush()
 
 def LogWarning(message):
-	print("[W] %s" % message)
+	print(f"[W] {message}")
 	sys.stdout.flush()
 
 def FindProgramFilesFolder():
 	env = os.environ
-	if "64bit" == platform.architecture()[0]:
-		if "ProgramFiles(x86)" in env:
-			programFilesFolder = env["ProgramFiles(x86)"]
-		else:
-			programFilesFolder = "C:\Program Files (x86)"
-	else:
-		if "ProgramFiles" in env:
-			programFilesFolder = env["ProgramFiles"]
-		else:
-			programFilesFolder = "C:\Program Files"
-	return programFilesFolder
+	return (
+		env.get("ProgramFiles(x86)", "C:\Program Files (x86)")
+		if platform.architecture()[0] == "64bit"
+		else env.get("ProgramFiles", "C:\Program Files")
+	)
 
 def FindVS2017OrUpFolder(programFilesFolder, vsVersion, vsName):
 	tryVswhereLocation = programFilesFolder + "\\Microsoft Visual Studio\\Installer\\vswhere.exe"
+	tryVcvarsall = "VCVARSALL.BAT"
 	if os.path.exists(tryVswhereLocation):
 		vsLocation = subprocess.check_output([tryVswhereLocation,
 			"-latest",
@@ -49,7 +41,6 @@ def FindVS2017OrUpFolder(programFilesFolder, vsVersion, vsName):
 			"-version", "[%d.0,%d.0)" % (vsVersion, vsVersion + 1),
 			"-prerelease"]).decode().split("\r\n")[0]
 		tryFolder = vsLocation + "\\VC\\Auxiliary\\Build\\"
-		tryVcvarsall = "VCVARSALL.BAT"
 		if os.path.exists(tryFolder + tryVcvarsall):
 			return tryFolder
 	else:
@@ -58,7 +49,6 @@ def FindVS2017OrUpFolder(programFilesFolder, vsVersion, vsName):
 		for name in names:
 			for sku in skus:
 				tryFolder = programFilesFolder + "\\Microsoft Visual Studio\\%s\\%s\\VC\\Auxiliary\\Build\\" % (name, sku)
-				tryVcvarsall = "VCVARSALL.BAT"
 				if os.path.exists(tryFolder + tryVcvarsall):
 					return tryFolder
 	LogError("Could NOT find VS%s.\n" % vsName)
@@ -74,13 +64,12 @@ def FindVS2015Folder(programFilesFolder):
 	env = os.environ
 	if "VS140COMNTOOLS" in env:
 		return env["VS140COMNTOOLS"] + "..\\..\\VC\\"
+	tryFolder = programFilesFolder + "\\Microsoft Visual Studio 14.0\\VC\\"
+	tryVcvarsall = "VCVARSALL.BAT"
+	if os.path.exists(tryFolder + tryVcvarsall):
+		return tryFolder
 	else:
-		tryFolder = programFilesFolder + "\\Microsoft Visual Studio 14.0\\VC\\"
-		tryVcvarsall = "VCVARSALL.BAT"
-		if os.path.exists(tryFolder + tryVcvarsall):
-			return tryFolder
-		else:
-			LogError("Could NOT find VS2015.\n")
+		LogError("Could NOT find VS2015.\n")
 
 class BatchCommand:
 	def __init__(self, hostPlatform):
@@ -91,19 +80,14 @@ class BatchCommand:
 		self.commands += [cmd]
 
 	def Execute(self):
-		batchFileName = "scBuild."
-		if "win" == self.hostPlatform:
-			batchFileName += "bat"
-		else:
-			batchFileName += "sh"
-		batchFile = open(batchFileName, "w")
-		batchFile.writelines([cmd_line + "\n" for cmd_line in self.commands])
-		batchFile.close()
-		if "win" == self.hostPlatform:
+		batchFileName = "scBuild." + ("bat" if self.hostPlatform == "win" else "sh")
+		with open(batchFileName, "w") as batchFile:
+			batchFile.writelines([cmd_line + "\n" for cmd_line in self.commands])
+		if self.hostPlatform == "win":
 			retCode = subprocess.call(batchFileName, shell = True)
 		else:
-			subprocess.call("chmod 777 " + batchFileName, shell = True)
-			retCode = subprocess.call("./" + batchFileName, shell = True)
+			subprocess.call(f"chmod 777 {batchFileName}", shell = True)
+			retCode = subprocess.call(f"./{batchFileName}", shell = True)
 		os.remove(batchFileName)
 		return retCode
 
@@ -115,9 +99,9 @@ def Build(hostPlatform, hostArch, buildSys, compiler, arch, configuration, tblge
 
 	multiConfig = (buildSys.find("vs") == 0)
 
-	buildDir = "Build/%s-%s-%s-%s" % (buildSys, hostPlatform, compiler, arch)
+	buildDir = f"Build/{buildSys}-{hostPlatform}-{compiler}-{arch}"
 	if (not multiConfig) or (configuration == "clangformat"):
-		buildDir += "-%s" % configuration;
+		buildDir += f"-{configuration}";
 	if not os.path.exists(buildDir):
 		os.mkdir(buildDir)
 	os.chdir(buildDir)
@@ -138,16 +122,16 @@ def Build(hostPlatform, hostArch, buildSys, compiler, arch, configuration, tblge
 			vsFolder = FindVS2017Folder(programFilesFolder)
 		elif (buildSys == "vs2015") or ((buildSys == "ninja") and (compiler == "vc140")):
 			vsFolder = FindVS2015Folder(programFilesFolder)
-		if "x64" == arch:
+		if arch == "x64":
 			vcOption = "amd64"
 			vcArch = "x64"
-		elif "x86" == arch:
+		elif arch == "x86":
 			vcOption = "x86"
 			vcArch = "Win32"
-		elif "arm64" == arch:
+		elif arch == "arm64":
 			vcOption = "amd64_arm64"
 			vcArch = "ARM64"
-		elif "arm" == arch:
+		elif arch == "arm":
 			vcOption = "amd64_arm"
 			vcArch = "ARM"
 		else:
@@ -156,7 +140,7 @@ def Build(hostPlatform, hostArch, buildSys, compiler, arch, configuration, tblge
 		if (buildSys == "vs2019") and (compiler == "vc141"):
 			vcOption += " -vcvars_ver=14.1"
 			vcToolset = "v141,"
-		elif ((buildSys == "vs2019") or (buildSys == "vs2017")) and (compiler == "vc140"):
+		elif buildSys in ["vs2019", "vs2017"] and compiler == "vc140":
 			vcOption += " -vcvars_ver=14.0"
 			vcToolset = "v140,"
 		batCmd.AddCommand("@call \"%sVCVARSALL.BAT\" %s" % (vsFolder, vcOption))
@@ -169,7 +153,7 @@ def Build(hostPlatform, hostArch, buildSys, compiler, arch, configuration, tblge
 			options = "-DSC_CLANGFORMAT=\"ON\""
 		else:
 			options = "-DCMAKE_BUILD_TYPE=\"%s\" -DSC_ARCH_NAME=\"%s\" %s" % (configuration, arch, tblgenOptions)
-		batCmd.AddCommand("cmake -G Ninja %s ../../" % options)
+		batCmd.AddCommand(f"cmake -G Ninja {options} ../../")
 		if tblgenMode:
 			batCmd.AddCommand("ninja clang-tblgen -j%d" % parallel)
 			batCmd.AddCommand("ninja llvm-tblgen -j%d" % parallel)
@@ -186,25 +170,25 @@ def Build(hostPlatform, hostArch, buildSys, compiler, arch, configuration, tblge
 			cmake_options = "-DSC_CLANGFORMAT=\"ON\""
 			msbuild_options = ""
 		else:
-			cmake_options = "-T %shost=x64 -A %s %s" % (vcToolset, vcArch, tblgenOptions)
+			cmake_options = f"-T {vcToolset}host=x64 -A {vcArch} {tblgenOptions}"
 			msbuild_options = "/m:%d /v:m /p:Configuration=%s,Platform=%s" % (parallel, configuration, vcArch)
-		batCmd.AddCommand("cmake -G %s %s ../../" % (generator, cmake_options))
+		batCmd.AddCommand(f"cmake -G {generator} {cmake_options} ../../")
 		if tblgenMode:
 			batCmd.AddCommand("MSBuild External\\DirectXShaderCompiler\\tools\\clang\\utils\\TableGen\\clang-tblgen.vcxproj /nologo %s" % msbuild_options)
 			batCmd.AddCommand("MSBuild External\\DirectXShaderCompiler\\utils\\TableGen\\llvm-tblgen.vcxproj /nologo %s" % msbuild_options)
 		else:
-			batCmd.AddCommand("MSBuild ALL_BUILD.vcxproj /nologo %s" % msbuild_options)
+			batCmd.AddCommand(f"MSBuild ALL_BUILD.vcxproj /nologo {msbuild_options}")
 	if batCmd.Execute() != 0:
 		LogError("Build failed.\n")
 
 	os.chdir(originalDir)
 
-	tblGenPath = buildDir + "/External/DirectXShaderCompiler"
+	tblGenPath = f"{buildDir}/External/DirectXShaderCompiler"
 	if multiConfig:
-		tblGenPath += "/" + configuration
+		tblGenPath += f"/{configuration}"
 	tblGenPath += "/bin/"
-	clangTblgenPath = tblGenPath + "clang-tblgen"
-	llvmTblGenPath = tblGenPath + "llvm-tblgen"
+	clangTblgenPath = f"{tblGenPath}clang-tblgen"
+	llvmTblGenPath = f"{tblGenPath}llvm-tblgen"
 	if (hostPlatform == "win"):
 		clangTblgenPath += ".exe"
 		llvmTblGenPath += ".exe"
@@ -212,15 +196,15 @@ def Build(hostPlatform, hostArch, buildSys, compiler, arch, configuration, tblge
 
 if __name__ == "__main__":
 	hostPlatform = sys.platform
-	if 0 == hostPlatform.find("win"):
+	if hostPlatform.find("win") == 0:
 		hostPlatform = "win"
-	elif 0 == hostPlatform.find("linux"):
+	elif hostPlatform.find("linux") == 0:
 		hostPlatform = "linux"
-	elif 0 == hostPlatform.find("darwin"):
+	elif hostPlatform.find("darwin") == 0:
 		hostPlatform = "osx"
 
 	hostArch = platform.machine()
-	if (hostArch == "AMD64") or (hostArch == "x86_64"):
+	if hostArch in ["AMD64", "x86_64"]:
 		hostArch = "x64"
 	elif (hostArch == "i386"):
 		hostArch = "x86"
@@ -233,32 +217,25 @@ if __name__ == "__main__":
 	if (argc > 1):
 		buildSys = sys.argv[1]
 	else:
-		if hostPlatform == "win":
-			buildSys = "vs2019"
-		else:
-			buildSys = "ninja"
+		buildSys = "vs2019" if hostPlatform == "win" else "ninja"
 	if (argc > 2):
 		compiler = sys.argv[2]
+	elif buildSys == "vs2015":
+		compiler = "vc140"
+	elif buildSys == "vs2017":
+		compiler = "vc141"
+	elif buildSys == "vs2019":
+		compiler = "vc142"
 	else:
-		if buildSys == "vs2019":
-			compiler = "vc142"
-		elif buildSys == "vs2017":
-			compiler = "vc141"
-		elif buildSys == "vs2015":
-			compiler = "vc140"
-		else:
-			compiler = "gcc"
-	if (argc > 3):
-		arch = sys.argv[3]
-	else:
-		arch = "x64"
-	if (argc > 4):
-		configuration = sys.argv[4]
-	else:
-		configuration = "Release"
-
+		compiler = "gcc"
+	arch = sys.argv[3] if (argc > 3) else "x64"
+	configuration = sys.argv[4] if (argc > 4) else "Release"
 	tblgenPath = None
-	if (configuration != "clangformat") and (hostArch != arch) and (not ((hostArch == "x64") and (arch == "x86"))):
+	if (
+		configuration != "clangformat"
+		and hostArch != arch
+		and (hostArch != "x64" or arch != "x86")
+	):
 		# Cross compiling:
 		# Generate a project with host architecture, build clang-tblgen and llvm-tblgen, and keep the path of clang-tblgen and llvm-tblgen
 		tblgenPath = Build(hostPlatform, hostArch, buildSys, compiler, hostArch, configuration, True, None)
